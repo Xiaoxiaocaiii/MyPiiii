@@ -13,12 +13,18 @@ import {
   type Turn,
 } from './contracts.js';
 import {
+  ModelAttemptDiagnosticError,
   ModelAdapterError,
+  type ModelAttemptDiagnostic,
   type ModelAdapter,
   type ModelRequest,
   type ModelResponse,
 } from './model.js';
-import { createToolContext, type ToolPermissionGrants } from './tool-permissions.js';
+import {
+  createToolContext,
+  isToolPermitted,
+  type ToolPermissionGrants,
+} from './tool-permissions.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { executeToolCall } from './tool-runtime.js';
 import type { TraceEventInput, TraceRecorder } from '../observability/trace-recorder.js';
@@ -36,6 +42,7 @@ export const runtimeFailureCodeSchema = z.enum([
   'MAX_TURNS_EXCEEDED',
   'RUN_TIMEOUT',
   'MODEL_CALL_FAILED',
+  'MODEL_DIAGNOSTIC_FAILED',
   'MODEL_OUTPUT_INVALID',
   'UNSUPPORTED_ACTION',
   'CONTEXT_BUDGET_EXCEEDED',
@@ -82,6 +89,8 @@ export interface RuntimeToolOptions {
 
 export interface RuntimeRunOptions {
   signal?: AbortSignal;
+  beforeModelRequest?: (request: ModelRequest, signal: AbortSignal) => Promise<void>;
+  onModelAttemptDiagnostic?: (diagnostic: ModelAttemptDiagnostic) => void | Promise<void>;
   tools?: RuntimeToolOptions;
   trace?: {
     readonly recorder: TraceRecorder;
@@ -138,28 +147,18 @@ export async function runAgent(
     if (options.signal?.aborted === true) {
       return await tracedFailure('ABORTED', 'The runtime was aborted');
     }
-    try {
-      buildContextWindow({
-        taskInput: parsedInput.inputMessage,
-        turns,
-        ...(parsedInput.config.context === undefined
-          ? {}
-          : { settings: parsedInput.config.context }),
-      });
-    } catch (error) {
-      if (error instanceof ContextBudgetError) {
-        return await tracedFailure(
-          'CONTEXT_BUDGET_EXCEEDED',
-          'The required context exceeds the character budget',
-        );
-      }
-      throw error;
-    }
     for (let turnIndex = 0; turnIndex < parsedInput.config.runtime.maxTurns; turnIndex += 1) {
       let output: unknown;
 
       try {
-        const request = createModelRequest(parsedInput, turnIndex, turns);
+        const request = createModelRequest(
+          parsedInput,
+          turnIndex,
+          turns,
+          options.tools,
+          controller.signal,
+        );
+        await options.beforeModelRequest?.(request, controller.signal);
         if (request.context !== undefined && traceRecorder !== undefined) {
           await recordTrace(traceRecorder, {
             eventType: 'context.built',
@@ -174,7 +173,12 @@ export async function runAgent(
             payload: { request },
           });
         }
-        const response = await completeWithAbort(adapter, request, controller.signal);
+        const response = await completeWithAbort(
+          adapter,
+          request,
+          controller.signal,
+          options.onModelAttemptDiagnostic,
+        );
         await recordTrace(options.trace?.recorder, {
           eventType: 'model.responded',
           turnIndex,
@@ -193,6 +197,13 @@ export async function runAgent(
         }
         if (controller.signal.reason === externalAbortReason) {
           return await tracedFailure('ABORTED', 'The runtime was aborted');
+        }
+        if (error instanceof ModelAttemptDiagnosticError) {
+          return await tracedFailure(
+            'MODEL_DIAGNOSTIC_FAILED',
+            'The model attempt diagnostic could not be persisted',
+            diagnosticCause(error),
+          );
         }
         if (error instanceof ModelAdapterError && error.code === 'MODEL_RESPONSE_INVALID') {
           return await tracedFailure(
@@ -344,27 +355,51 @@ function createModelRequest(
   input: RuntimeInput,
   turnIndex: number,
   turns: readonly Turn[],
+  toolOptions: RuntimeToolOptions | undefined,
+  signal: AbortSignal,
 ): ModelRequest {
+  const availableTools =
+    toolOptions === undefined ? [] : describePermittedTools(input, toolOptions, signal);
   const request: ModelRequest = {
     schemaVersion: 1,
     sessionId: input.sessionId,
     turnIndex,
     inputMessage: input.inputMessage,
     model: input.config.model,
-  };
-
-  if (turns.length === 0) {
-    return request;
-  }
-
-  return {
-    ...request,
+    ...(availableTools.length === 0 ? {} : { tools: availableTools }),
     context: buildContextWindow({
       taskInput: input.inputMessage,
       turns,
+      visibleTools: availableTools,
       ...(input.config.context === undefined ? {} : { settings: input.config.context }),
     }),
   };
+
+  return request;
+}
+
+function describePermittedTools(
+  input: RuntimeInput,
+  toolOptions: RuntimeToolOptions,
+  signal: AbortSignal,
+): NonNullable<ModelRequest['tools']> {
+  const scenarioId = input.config.scenarioId;
+  const enabledTools = input.config.tools.enabled;
+  const availableDefinitions = toolOptions.registry.listAvailable(scenarioId, enabledTools);
+  const workspaceRoot =
+    toolOptions.workspaceRoot?.trim().length === 0 ? undefined : toolOptions.workspaceRoot;
+  const context = createToolContext({
+    scenarioId,
+    signal,
+    ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+  });
+  const permittedNames = availableDefinitions
+    .filter((definition) =>
+      isToolPermitted(definition.sideEffect, toolOptions.permissions ?? {}, context),
+    )
+    .map((definition) => definition.name);
+
+  return toolOptions.registry.describeAvailable(scenarioId, permittedNames);
 }
 
 function createTurn(
@@ -437,6 +472,7 @@ function completeWithAbort(
   adapter: ModelAdapter,
   request: ModelRequest,
   signal: AbortSignal,
+  onAttemptDiagnostic: RuntimeRunOptions['onModelAttemptDiagnostic'],
 ): Promise<ModelResponse> {
   return new Promise((resolve, reject) => {
     const onAbort = (): void => {
@@ -445,16 +481,31 @@ function completeWithAbort(
     };
     signal.addEventListener('abort', onAbort, { once: true });
 
-    void adapter.complete(request, { signal }).then(
-      (response) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(response);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error instanceof Error ? error : new Error('Unknown model adapter failure'));
-      },
-    );
+    void adapter
+      .complete(request, {
+        signal,
+        ...(onAttemptDiagnostic === undefined
+          ? {}
+          : {
+              onAttemptDiagnostic: async (diagnostic) => {
+                try {
+                  await onAttemptDiagnostic(diagnostic);
+                } catch {
+                  throw new ModelAttemptDiagnosticError();
+                }
+              },
+            }),
+      })
+      .then(
+        (response) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(response);
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error instanceof Error ? error : new Error('Unknown model adapter failure'));
+        },
+      );
   });
 }
 

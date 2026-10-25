@@ -113,9 +113,18 @@ export async function executeToolCall(
     callId: action.callId,
     toolName: action.toolName,
     data: jsonOutput.data,
-    truncated: false,
+    truncated: isOutputTruncated(jsonOutput.data),
     durationMs: elapsed(now, startedAt),
   });
+}
+
+function isOutputTruncated(output: JsonValue): boolean {
+  return (
+    typeof output === 'object' &&
+    output !== null &&
+    !Array.isArray(output) &&
+    output.truncated === true
+  );
 }
 
 function createErrorObservation(

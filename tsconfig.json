@@ -17,5 +17,12 @@
     "skipLibCheck": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "scripts/freeze-real-eval-snapshot.ts",
+    "scripts/generate-real-eval-results.ts",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ]
 }

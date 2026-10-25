@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   agentActionSchema,
@@ -125,7 +126,7 @@ export function replayLoadedTrace(run: LoadedTraceRun): ReplayResult {
           inputMessage: turn.inputMessage,
           modelOutput: modelOutputs.get(turnIndex),
           action: turn.action,
-          observations: [...(observations.get(turnIndex) ?? []), ...turn.observations],
+          observations: mergeObservations(observations.get(turnIndex) ?? [], turn.observations),
         };
         setOnce(turns, turn.turnIndex, replayTurn);
         break;
@@ -180,6 +181,22 @@ function addObservation(
   const existing = values.get(key) ?? [];
   existing.push(observation);
   values.set(key, existing);
+}
+
+function mergeObservations(
+  eventObservations: readonly Observation[],
+  turnObservations: readonly Observation[],
+): Observation[] {
+  const merged = [...eventObservations];
+  for (const observation of turnObservations) {
+    const existing = merged.find((candidate) => candidate.callId === observation.callId);
+    if (existing === undefined) {
+      merged.push(observation);
+    } else if (!isDeepStrictEqual(existing, observation)) {
+      throw new TraceReplayError('REPLAY_TURN_CONFLICT');
+    }
+  }
+  return merged;
 }
 
 function requireTurnIndex(value: number | null): number {

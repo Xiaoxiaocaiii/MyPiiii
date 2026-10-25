@@ -34,6 +34,8 @@ const HELP_TEXT = [
   'Runtime commands:',
   '  demo         Run the deterministic repo-qa baseline/ablation demo',
   '  replay       Replay a demo case from persisted Trace artifacts',
+  '  pilot-task   Run the fixed DeepSeek pilot task (requires DEEPSEEK_MODEL and cost confirmation)',
+  '  real-eval-batch  Plan or run an authorized multi-task source evaluation batch',
 ].join('\n');
 
 export function parseCliArgs(args: readonly string[]): CliCommand {

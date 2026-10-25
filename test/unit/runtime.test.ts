@@ -136,12 +136,18 @@ describe('runAgent no-tool loop', () => {
 
     expect(result.status).toBe('completed');
     expect(result.turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
-    expect(adapter.requests[0]).toEqual({
+    expect(adapter.requests[0]).toMatchObject({
       schemaVersion: 1,
       sessionId: 'session-1',
       turnIndex: 0,
       inputMessage: 'Summarize the repository.',
       model: config.model,
+      context: {
+        taskInput: 'Summarize the repository.',
+        visibleTools: [],
+        recentTurns: [],
+        observations: [],
+      },
     });
     expect(adapter.requests[1]).toMatchObject({
       schemaVersion: 1,
@@ -150,6 +156,8 @@ describe('runAgent no-tool loop', () => {
       inputMessage: 'Summarize the repository.',
       model: config.model,
       context: {
+        taskInput: 'Summarize the repository.',
+        visibleTools: [],
         recentTurns: [
           {
             sourceTurnIndex: 0,

@@ -88,6 +88,7 @@ describe('OpenAIModelAdapter', () => {
     const callOptions = fetchMock.mock.calls[0]?.[1];
     expect(callOptions?.body).toEqual(expect.any(String));
     expect(callOptions?.body as string).not.toContain('test-secret');
+    expect(callOptions?.body as string).not.toContain('Available tools for this request');
   });
 
   it('accepts the top-level output_text convenience field', async () => {
@@ -139,15 +140,30 @@ describe('OpenAIModelAdapter', () => {
         durationMs: 5,
       },
     ];
+    const tools = [
+      {
+        schemaVersion: 1 as const,
+        name: 'repository.search',
+        description: 'Search repository content',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string', minLength: 1 } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+      },
+    ];
 
     await adapter.complete(
       {
         ...request,
         turnIndex: 1,
+        tools,
         context: {
           schemaVersion: 1,
           systemRules: ['Keep the result structured.'],
           taskInput: 'Use the tool evidence.',
+          visibleTools: tools,
           recentTurns: [],
           observations: [
             {
@@ -160,6 +176,17 @@ describe('OpenAIModelAdapter', () => {
           ],
           omittedTurnCount: 0,
           omittedObservationCount: 0,
+          omissionReasons: {
+            duplicateTurns: 0,
+            recentTurnLimit: 0,
+            characterBudgetTurns: 0,
+            duplicateObservations: 0,
+            characterBudgetObservations: 0,
+          },
+          truncationReasons: {
+            toolOutputLimitObservations: 0,
+            contextCharacterLimitObservations: 0,
+          },
         },
       },
       { signal: new AbortController().signal },
@@ -175,12 +202,10 @@ describe('OpenAIModelAdapter', () => {
         },
         {
           role: 'user',
-          content: 'Use the tool evidence.',
-        },
-        {
-          role: 'user',
           content: JSON.stringify({
             schemaVersion: 1,
+            taskInput: 'Use the tool evidence.',
+            visibleTools: tools,
             recentTurns: [],
             observations: [
               {
@@ -193,10 +218,61 @@ describe('OpenAIModelAdapter', () => {
             ],
             omittedTurnCount: 0,
             omittedObservationCount: 0,
+            omissionReasons: {
+              duplicateTurns: 0,
+              recentTurnLimit: 0,
+              characterBudgetTurns: 0,
+              duplicateObservations: 0,
+              characterBudgetObservations: 0,
+            },
+            truncationReasons: {
+              toolOutputLimitObservations: 0,
+              contextCharacterLimitObservations: 0,
+            },
           }),
         },
       ],
     });
+  });
+
+  it('includes available tool schemas in the developer input without native API tools', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        output_text: JSON.stringify({
+          schemaVersion: 1,
+          type: 'final_answer',
+          content: 'Done',
+        }),
+      }),
+    );
+    const adapter = new OpenAIModelAdapter({
+      apiKey: 'test-secret',
+      fetch: fetchMock,
+    });
+    const tools = [
+      {
+        schemaVersion: 1 as const,
+        name: 'repository.search',
+        description: 'Search repository content',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string', minLength: 1 } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+      },
+    ];
+
+    await adapter.complete({ ...request, tools }, { signal: new AbortController().signal });
+
+    const callOptions = fetchMock.mock.calls[0]?.[1];
+    if (typeof callOptions?.body !== 'string') {
+      throw new Error('Expected a serialized Responses API request body');
+    }
+    expect(callOptions.body).toContain('"role":"developer"');
+    expect(callOptions.body).toContain('Available tools for this request');
+    expect(callOptions.body).toContain(JSON.stringify(JSON.stringify(tools)).slice(1, -1));
+    expect(callOptions.body).not.toContain('"tools":');
   });
 
   it('maps HTTP failures without exposing the credential', async () => {

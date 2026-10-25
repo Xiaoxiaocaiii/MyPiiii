@@ -129,12 +129,63 @@ describe('runAgent tool loop', () => {
       ],
     });
     expect(execute).toHaveBeenCalledOnce();
+    expect(adapter.requests[0]?.tools).toEqual(
+      registry.describeAvailable('repo-qa', ['repository.search']),
+    );
+    expect(adapter.requests[1]?.tools).toEqual(adapter.requests[0]?.tools);
+    expect(adapter.requests[0]?.context?.visibleTools).toEqual(adapter.requests[0]?.tools);
+    expect(adapter.requests[0]?.context?.observations).toEqual([]);
+    expect(adapter.requests[1]?.context?.visibleTools).toEqual(adapter.requests[1]?.tools);
     expect(adapter.requests[0]).not.toHaveProperty('observations');
     expect(adapter.requests[1]).not.toHaveProperty('observations');
     expect(adapter.requests[1]?.context?.observations.map((entry) => entry.observation)).toEqual(
       result.turns[0]?.observations,
     );
+    expect(adapter.requests[1]?.context?.observations[0]).toMatchObject({
+      sourceTurnIndex: 0,
+      callId: 'call-1',
+      toolName: 'repository.search',
+    });
     expect(JSON.stringify(adapter.requests[1])).not.toContain(' runtime result ');
+  });
+
+  it('hides disabled tools from the model and rejects attempts to call them', async () => {
+    const visibleExecute = vi.fn(() => Promise.resolve({ matches: ['visible'] }));
+    const hiddenExecute = vi.fn(() => Promise.resolve({ matches: ['hidden'] }));
+    const visibleTool = createSearchTool(visibleExecute);
+    const hiddenTool = {
+      ...createSearchTool(hiddenExecute),
+      name: 'repository.hidden',
+    };
+    const registry = new ToolRegistry([visibleTool, hiddenTool]);
+    const adapter = new FakeModelAdapter([
+      {
+        type: 'response',
+        response: {
+          schemaVersion: 1,
+          output: toolCall('repository.hidden'),
+        },
+      },
+      {
+        type: 'response',
+        response: { schemaVersion: 1, output: finalAnswer('Denied') },
+      },
+    ]);
+
+    const result = await runAgent(input, adapter, { tools: { registry } });
+    const visibleDescriptions = registry.describeAvailable('repo-qa', ['repository.search']);
+
+    expect(adapter.requests).toHaveLength(2);
+    expect(adapter.requests[0]?.tools).toEqual(visibleDescriptions);
+    expect(adapter.requests[0]?.tools?.map(({ name }) => name)).toEqual(['repository.search']);
+    expect(adapter.requests[1]?.tools).toEqual(visibleDescriptions);
+    expect(adapter.requests[0]?.context?.visibleTools).toEqual(visibleDescriptions);
+    expect(adapter.requests[1]?.context?.visibleTools).toEqual(visibleDescriptions);
+    expect(result.turns[0]?.observations).toMatchObject([
+      { type: 'tool_error', code: 'PERMISSION_DENIED' },
+    ]);
+    expect(visibleExecute).not.toHaveBeenCalled();
+    expect(hiddenExecute).not.toHaveBeenCalled();
   });
 
   it('feeds a tool validation error back to the model and continues', async () => {
@@ -223,6 +274,7 @@ describe('runAgent tool loop', () => {
       error: { code: 'UNSUPPORTED_ACTION' },
       turns: [{ stopReason: 'UNSUPPORTED_ACTION', observations: [] }],
     });
+    expect(adapter.requests[0]).not.toHaveProperty('tools');
   });
 
   it('preserves the unsupported action path when no tools are enabled', async () => {
@@ -250,6 +302,7 @@ describe('runAgent tool loop', () => {
       status: 'failed',
       error: { code: 'UNSUPPORTED_ACTION' },
     });
+    expect(adapter.requests[0]).not.toHaveProperty('tools');
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -303,21 +356,26 @@ describe('runAgent tool loop', () => {
 
   it('applies external cancellation while a tool is executing', async () => {
     const controller = new AbortController();
-    const execute = vi.fn(
-      (_toolInput: SearchInput, context: ToolContext) =>
-        new Promise<SearchOutput>((_, reject) => {
-          context.signal.addEventListener(
-            'abort',
-            () => {
-              const reason: unknown = context.signal.reason;
-              reject(reason instanceof Error ? reason : new Error('Tool aborted'));
-            },
-            {
-              once: true,
-            },
-          );
-        }),
-    );
+    let markToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      markToolStarted = resolve;
+    });
+    const execute = vi.fn((_toolInput: SearchInput, context: ToolContext) => {
+      const execution = new Promise<SearchOutput>((_, reject) => {
+        context.signal.addEventListener(
+          'abort',
+          () => {
+            const reason: unknown = context.signal.reason;
+            reject(reason instanceof Error ? reason : new Error('Tool aborted'));
+          },
+          {
+            once: true,
+          },
+        );
+      });
+      markToolStarted();
+      return execution;
+    });
     const registry = new ToolRegistry([createSearchTool(execute)]);
     const adapter = new FakeModelAdapter([
       {
@@ -330,7 +388,7 @@ describe('runAgent tool loop', () => {
       signal: controller.signal,
       tools: { registry },
     });
-    await Promise.resolve();
+    await toolStarted;
     controller.abort('private cancellation reason');
     const result = await run;
 

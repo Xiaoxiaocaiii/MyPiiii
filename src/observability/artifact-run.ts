@@ -5,7 +5,12 @@ import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 
 import { experimentConfigSchema, type ExperimentConfig } from '../core/config.js';
-import { parseRunManifest, persistedJsonValueSchema, type RunManifest } from './trace-contracts.js';
+import {
+  parseRunManifest,
+  persistedJsonValueSchema,
+  runProvenanceSchema,
+  type RunManifest,
+} from './trace-contracts.js';
 import {
   createJsonlTraceSink,
   type JsonlTraceFileHandle,
@@ -34,6 +39,7 @@ export interface ArtifactRunOptions {
   readonly directory: string;
   readonly sessionId: string;
   readonly config: ExperimentConfig;
+  readonly provenance?: z.infer<typeof runProvenanceSchema>;
   readonly createdAt?: Date;
 }
 
@@ -97,7 +103,16 @@ export interface ArtifactRun {
 export async function createArtifactRun(options: ArtifactRunOptions): Promise<ArtifactRun> {
   const config = experimentConfigSchema.safeParse(options.config);
   const sessionId = sessionIdSchema.safeParse(options.sessionId);
-  if (!config.success || !sessionId.success || !isValidDate(options.createdAt)) {
+  const provenance =
+    options.provenance === undefined
+      ? undefined
+      : runProvenanceSchema.safeParse(options.provenance);
+  if (
+    !config.success ||
+    !sessionId.success ||
+    !isValidDate(options.createdAt) ||
+    (provenance !== undefined && !provenance.success)
+  ) {
     throw new ArtifactRunError('ARTIFACT_INPUT_INVALID');
   }
   if (options.directory.trim().length === 0) {
@@ -135,13 +150,20 @@ export async function createArtifactRun(options: ArtifactRunOptions): Promise<Ar
     throw new ArtifactRunError('ARTIFACT_TRACE_OPEN_FAILED');
   }
 
-  return new ManagedArtifactRun(paths, trace, config.data, createdAt);
+  return new ManagedArtifactRun(
+    paths,
+    trace,
+    config.data,
+    provenance?.success === true ? provenance.data : undefined,
+    createdAt,
+  );
 }
 
 class ManagedArtifactRun implements ArtifactRun {
   readonly paths: ArtifactRunPaths;
   readonly trace: JsonlTraceSink;
   readonly #config: ExperimentConfig;
+  readonly #provenance: z.infer<typeof runProvenanceSchema> | undefined;
   readonly #createdAt: Date;
   #finalized = false;
 
@@ -149,11 +171,13 @@ class ManagedArtifactRun implements ArtifactRun {
     paths: ArtifactRunPaths,
     trace: JsonlTraceSink,
     config: ExperimentConfig,
+    provenance: z.infer<typeof runProvenanceSchema> | undefined,
     createdAt: Date,
   ) {
     this.paths = paths;
     this.trace = trace;
     this.#config = config;
+    this.#provenance = provenance;
     this.#createdAt = createdAt;
   }
 
@@ -239,6 +263,7 @@ class ManagedArtifactRun implements ArtifactRun {
         context: this.#config.context,
         tools: this.#config.tools,
       },
+      ...(this.#provenance === undefined ? {} : { provenance: this.#provenance }),
       artifacts: {
         trace: {
           ...trace,

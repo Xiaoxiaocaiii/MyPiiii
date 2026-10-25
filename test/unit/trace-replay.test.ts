@@ -216,6 +216,70 @@ describe('replayLoadedTrace', () => {
     ]);
   });
 
+  it('deduplicates matching tool observations recorded in both tool and turn events', () => {
+    const observation = {
+      type: 'tool_result',
+      schemaVersion: 1,
+      callId: 'call-1',
+      toolName: 'read',
+      data: { value: 1 },
+      truncated: false,
+      durationMs: 2,
+    } as const;
+    const events = [
+      ...completedRun().events.slice(0, 3),
+      event({
+        schemaVersion: 1,
+        eventId: 'event-tool-completed',
+        sessionId: 'session-1',
+        turnIndex: 0,
+        sequence: 3,
+        eventType: 'tool.completed',
+        timestamp,
+        payload: {
+          callId: observation.callId,
+          toolName: observation.toolName,
+          data: observation.data,
+          truncated: observation.truncated,
+          durationMs: observation.durationMs,
+        },
+      }),
+      event({
+        schemaVersion: 1,
+        eventId: 'event-turn-completed',
+        sessionId: 'session-1',
+        turnIndex: 0,
+        sequence: 4,
+        eventType: 'turn.completed',
+        timestamp,
+        payload: {
+          turn: {
+            schemaVersion: 1,
+            sessionId: 'session-1',
+            turnIndex: 0,
+            inputMessage: 'Inspect the repository.',
+            action: { schemaVersion: 1, type: 'final_answer', content: 'Done' },
+            observations: [observation],
+          },
+        },
+      }),
+      event({
+        schemaVersion: 1,
+        eventId: 'event-session-completed',
+        sessionId: 'session-1',
+        turnIndex: null,
+        sequence: 5,
+        eventType: 'session.completed',
+        timestamp,
+        payload: { finalOutput: 'Done', turnCount: 1 },
+      }),
+    ];
+
+    const result = replayLoadedTrace(loaded(events));
+
+    expect(result.turns[0]?.observations).toEqual([observation]);
+  });
+
   it('reconstructs failed tool observations before the turn completes', () => {
     const run = completedRun();
     const failedTool = event({

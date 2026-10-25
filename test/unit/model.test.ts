@@ -32,6 +32,64 @@ describe('model contracts', () => {
     expect(roundTrip(modelRequestSchema, request)).toEqual(request);
   });
 
+  it('round-trips optional tool descriptions with JSON Schemas', () => {
+    const requestWithTools: ModelRequest = {
+      ...request,
+      tools: [
+        {
+          schemaVersion: 1,
+          name: 'repository.search',
+          description: 'Search repository content',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+            additionalProperties: false,
+          },
+        },
+      ],
+    };
+
+    expect(roundTrip(modelRequestSchema, requestWithTools)).toEqual(requestWithTools);
+  });
+
+  it('requires the request task and tool alias to match its Context view', () => {
+    const tool = {
+      schemaVersion: 1 as const,
+      name: 'repository.search',
+      description: 'Search repository content',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    };
+    const requestWithContext: ModelRequest = {
+      ...request,
+      tools: [tool],
+      context: {
+        schemaVersion: 1,
+        systemRules: ['Return one action.'],
+        taskInput: request.inputMessage,
+        visibleTools: [tool],
+        recentTurns: [],
+        observations: [],
+        omittedTurnCount: 0,
+        omittedObservationCount: 0,
+      },
+    };
+
+    expect(modelRequestSchema.safeParse(requestWithContext).success).toBe(true);
+    expect(
+      modelRequestSchema.safeParse({
+        ...requestWithContext,
+        inputMessage: 'A different task',
+        tools: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it('round-trips a JSON-safe model response', () => {
     const response: ModelResponse = {
       schemaVersion: 1,
@@ -49,7 +107,7 @@ describe('model contracts', () => {
     {
       name: 'unknown request field',
       schema: modelRequestSchema,
-      value: { ...request, tools: [] },
+      value: { ...request, debug: true },
     },
     {
       name: 'invalid session identifier',

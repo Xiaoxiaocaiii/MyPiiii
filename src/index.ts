@@ -47,6 +47,7 @@ export {
   type Turn,
 } from './core/contracts.js';
 export { FakeModelAdapter, type FakeModelStep } from './core/fake-model.js';
+export { DeepSeekModelAdapter, type DeepSeekModelAdapterOptions } from './core/deepseek-model.js';
 export {
   ModelAdapterError,
   modelAdapterErrorCodes,
@@ -55,6 +56,8 @@ export {
   type ModelAdapter,
   type ModelAdapterErrorCode,
   type ModelCallOptions,
+  ModelAttemptDiagnosticError,
+  type ModelAttemptDiagnostic,
   type ModelParameters,
   type ModelRequest,
   type ModelResponse,
@@ -112,10 +115,12 @@ export {
   parseTraceEvent,
   persistedJsonValueSchema,
   runArtifactDescriptorSchema,
+  runProvenanceSchema,
   runManifestSchema,
   traceEventSchema,
   type ObservabilityContractErrorCode,
   type RunArtifactDescriptor,
+  type RunProvenance,
   type RunManifest,
   type TraceEvent,
   type TraceEventType,
@@ -194,6 +199,14 @@ export {
   type TraceConsistencyReport,
 } from './observability/trace-consistency.js';
 export {
+  createModelAttemptDiagnosticsWriter,
+  modelAttemptDiagnosticSchema,
+  ModelAttemptDiagnosticsWriterError,
+  type ModelAttemptDiagnosticsWriter,
+  type ModelAttemptDiagnosticsWriterErrorCode,
+  type PersistedModelAttemptDiagnostic,
+} from './observability/model-attempt-diagnostics.js';
+export {
   EvalContractError,
   evalCaseSchema,
   evalDatasetSchema,
@@ -266,6 +279,66 @@ export {
   type EvalRunResult,
 } from './eval/eval-runner.js';
 export {
+  createRealEvalSnapshotPreflight,
+  createRealEvalToolRegistry,
+  realEvalToolNames,
+} from './eval/real-eval-tools.js';
+export {
+  createRealEvalBatchPlan,
+  formatRealEvalBatchDryRun,
+  persistRealEvalBatchPlan,
+  realEvalBatchAuthorizationSchema,
+  realEvalBatchManifestSchema,
+  resumeRealEvalBatch,
+  runRealEvalBatch,
+  RealEvalBatchError,
+  type CreateRealEvalBatchPlanOptions,
+  type RealEvalBatchAuthorization,
+  type RealEvalBatchErrorCode,
+  type RealEvalBatchItem,
+  type RealEvalBatchManifest,
+  type RealEvalBatchPlan,
+  type RealEvalBatchVariantInput,
+  type ResumeRealEvalBatchOptions,
+  type RunRealEvalBatchOptions,
+} from './eval/real-eval-batch.js';
+export {
+  adjudicateRealEvalSample,
+  createRealEvalBlindPackets,
+  extractRealEvalLineReferences,
+  hashRealEvalRubrics,
+  parseRealEvalRubrics,
+  realEvalAdjudicationDatasetSchema,
+  realEvalAdjudicationRecordSchema,
+  realEvalBlindPacketSchema,
+  realEvalRubricFactSchema,
+  realEvalReviewSubmissionSchema,
+  realEvalRubricsSchema,
+  realEvalTaskRubricSchema,
+  realEvalUnblindedRecordSchema,
+  realEvalUnblindingEntrySchema,
+  RealEvalAdjudicationError,
+  unblindRealEvalAdjudications,
+  type AdjudicateRealEvalSampleOptions,
+  type RealEvalAdjudicationDataset,
+  type RealEvalAdjudicationErrorCode,
+  type RealEvalAdjudicationRecord,
+  type RealEvalBlindPacket,
+  type RealEvalBlindSource,
+  type RealEvalLineReference,
+  type RealEvalReviewSubmission,
+  type RealEvalRubrics,
+  type RealEvalTaskRubric,
+  type RealEvalUnblindedRecord,
+  type RealEvalUnblindingEntry,
+} from './eval/real-eval-adjudication.js';
+export {
+  RealEvalBatchCommandError,
+  realEvalBatchCommandHelp,
+  runRealEvalBatchCommand,
+  type RealEvalBatchCommandOptions,
+} from './eval/real-eval-batch-command.js';
+export {
   aggregateEvalMetrics,
   evalMetricsSchema,
   MetricsAggregatorError,
@@ -295,4 +368,10 @@ export {
   replayDemoCommand,
   type DemoReplayErrorCode,
 } from './eval/demo-replay.js';
+export {
+  PilotTaskError,
+  runPilotTaskCommand,
+  type PilotTaskCommandOptions,
+  type PilotTaskErrorCode,
+} from './eval/pilot-task.js';
 export { formatProjectSummary, projectInfo } from './project.js';

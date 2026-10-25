@@ -2,4 +2,8 @@ node_modules/
 dist/
 coverage/
 artifacts/
+.trae/
 package-lock.json
+docs/product-evolution-roadmap.md
+docs/research/real-eval/batches/
+docs/research/real-eval/20??-??-??/

@@ -9,7 +9,15 @@ const typedConfigs = tseslint.configs.recommendedTypeChecked.map((config) => ({
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'coverage/**', 'node_modules/**', 'artifacts/**'],
+    ignores: [
+      'dist/**',
+      'coverage/**',
+      'node_modules/**',
+      'artifacts/**',
+      '.trae/**',
+      '.public-release/**',
+      'docs/research/real-eval/snapshots/**',
+    ],
   },
   {
     ...eslint.configs.recommended,

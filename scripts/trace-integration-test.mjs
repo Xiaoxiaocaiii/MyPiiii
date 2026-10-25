@@ -147,6 +147,7 @@ try {
     completed.loaded.events.map((event) => event.eventType),
     [
       'session.started',
+      'context.built',
       'model.requested',
       'model.responded',
       'turn.completed',

@@ -110,6 +110,23 @@ describe('buildContextWindow', () => {
     expect(contextCharacters(view)).toBeLessThanOrEqual(defaultContextWindowSettings.maxCharacters);
   });
 
+  it('includes concrete JSON examples for each supported action in system rules', () => {
+    const view = buildContextWindow({
+      taskInput: 'Inspect the runtime.',
+      turns: [],
+    });
+
+    expect(view.systemRules).toContain(
+      'Output one JSON object only. Never return multiple JSON objects, newline-delimited JSON, Markdown, or prose. For tool use, choose exactly one tool_call and wait for its observation before requesting another tool.',
+    );
+    expect(view.systemRules).toContain(
+      'Example final_answer JSON: {"schemaVersion":1,"type":"final_answer","content":"answer"}',
+    );
+    expect(view.systemRules).toContain(
+      'Example tool_call JSON: {"schemaVersion":1,"type":"tool_call","callId":"call-1","toolName":"repo.search_source","args":{"query":"ContextBudgetError"}}',
+    );
+  });
+
   it('keeps only the most recent configured number of turns', () => {
     const turns = [
       createTurn(0, invalidAction('Zero')),
@@ -125,6 +142,7 @@ describe('buildContextWindow', () => {
 
     expect(view.recentTurns.map((turn) => turn.sourceTurnIndex)).toEqual([1, 2]);
     expect(view.omittedTurnCount).toBe(1);
+    expect(view.omissionReasons).toMatchObject({ recentTurnLimit: 1 });
   });
 
   it('retains only the newest exact duplicate turn and observation', () => {
@@ -146,6 +164,10 @@ describe('buildContextWindow', () => {
     expect(view.observations[0]?.sourceTurnIndex).toBe(1);
     expect(view.omittedTurnCount).toBe(1);
     expect(view.omittedObservationCount).toBe(1);
+    expect(view.omissionReasons).toMatchObject({
+      duplicateTurns: 1,
+      duplicateObservations: 1,
+    });
   });
 
   it('deterministically truncates large observations while retaining their source', () => {
@@ -161,6 +183,7 @@ describe('buildContextWindow', () => {
       callId: 'call-3',
       toolName: 'repository.search',
       truncated: true,
+      truncationReasons: ['context_character_limit'],
       observation: {
         type: 'tool_result',
         callId: 'call-3',
@@ -173,6 +196,82 @@ describe('buildContextWindow', () => {
         ? entry.observation.data.length
         : 0,
     ).toBe(20);
+    expect(view.truncationReasons).toMatchObject({
+      contextCharacterLimitObservations: 1,
+      toolOutputLimitObservations: 0,
+    });
+  });
+
+  it('records tool-output truncation separately from Context character truncation', () => {
+    const truncated = {
+      ...resultObservation('call-truncated', 'partial-result'),
+      truncated: true,
+    };
+    const view = buildContextWindow({
+      taskInput: 'Inspect the runtime.',
+      turns: [createTurn(0, finalAction('Done'), [truncated])],
+    });
+
+    expect(view.observations[0]?.truncationReasons).toEqual(['tool_output_limit']);
+    expect(view.truncationReasons).toMatchObject({
+      toolOutputLimitObservations: 1,
+      contextCharacterLimitObservations: 0,
+    });
+  });
+
+  it('retains truncation reasons when the affected observation is also omitted', () => {
+    const turn = createTurn(0, finalAction('Done'), [
+      resultObservation('call-omitted', 'x'.repeat(100)),
+    ]);
+    const fullView = buildContextWindow({
+      taskInput: 'Inspect the runtime.',
+      turns: [turn],
+      settings: { observationMaxCharacters: 10 },
+    });
+    const view = buildContextWindow({
+      taskInput: 'Inspect the runtime.',
+      turns: [turn],
+      settings: {
+        maxCharacters: contextCharacters(fullView) - 1,
+        observationMaxCharacters: 10,
+      },
+    });
+
+    expect(view.observations).toEqual([]);
+    expect(view.omittedObservationCount).toBe(1);
+    expect(view.omissionReasons).toMatchObject({ characterBudgetObservations: 1 });
+    expect(view.truncationReasons).toMatchObject({
+      contextCharacterLimitObservations: 1,
+    });
+  });
+
+  it('includes visible tool descriptions in the character budget', () => {
+    const input = {
+      taskInput: 'Inspect the runtime.',
+      turns: [],
+    };
+    const noToolView = buildContextWindow(input);
+    const visibleTools = [
+      {
+        schemaVersion: 1 as const,
+        name: 'repo.search_source',
+        description: 'Search a fixed, permitted collection of source files.',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string', minLength: 1 } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+      },
+    ];
+
+    expect(() =>
+      buildContextWindow({
+        ...input,
+        visibleTools,
+        settings: { maxCharacters: contextCharacters(noToolView) },
+      }),
+    ).toThrowError(ContextBudgetError);
   });
 
   it('prioritizes recent turns over observations when the budget is constrained', () => {
@@ -196,6 +295,9 @@ describe('buildContextWindow', () => {
     expect(view.recentTurns).toHaveLength(1);
     expect(view.observations).toEqual([]);
     expect(view.omittedObservationCount).toBe(1);
+    expect(view.omissionReasons).toMatchObject({
+      characterBudgetObservations: 1,
+    });
   });
 
   it('throws a stable error rather than dropping required context', () => {
@@ -246,5 +348,55 @@ describe('runtime context budget', () => {
       turns: [],
     });
     expect(adapter.requests).toHaveLength(0);
+  });
+
+  it('records why prior turns were omitted from a Fake Model request', async () => {
+    const runtimeInput: RuntimeInput = {
+      schemaVersion: 1,
+      sessionId: 'context-session',
+      inputMessage: 'Inspect the runtime.',
+      config: {
+        ...baseConfig,
+        context: {
+          maxCharacters: 4_000,
+          recentTurns: 0,
+          observationMaxCharacters: 2_000,
+        },
+      },
+    };
+    const adapter = new FakeModelAdapter([
+      {
+        type: 'response',
+        response: {
+          schemaVersion: 1,
+          output: invalidAction('Retry'),
+        },
+      },
+      {
+        type: 'response',
+        response: {
+          schemaVersion: 1,
+          output: finalAction('Done'),
+        },
+      },
+    ]);
+
+    const result = await runAgent(runtimeInput, adapter);
+
+    expect(result.status).toBe('completed');
+    expect(adapter.requests).toHaveLength(2);
+    expect(adapter.requests[0]?.context).toMatchObject({
+      recentTurns: [],
+      omittedTurnCount: 0,
+    });
+    expect(adapter.requests[1]?.context).toMatchObject({
+      recentTurns: [],
+      omittedTurnCount: 1,
+      omissionReasons: {
+        duplicateTurns: 0,
+        recentTurnLimit: 1,
+        characterBudgetTurns: 0,
+      },
+    });
   });
 });

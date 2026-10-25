@@ -83,32 +83,27 @@ export class OpenAIModelAdapter implements ModelAdapter {
 
 function buildInput(request: ModelRequest): Array<{ role: 'developer' | 'user'; content: string }> {
   if (request.context !== undefined) {
+    const { systemRules, ...contextPayload } = request.context;
     return [
       {
         role: 'developer',
-        content: request.context.systemRules.join('\n'),
+        content: systemRules.join('\n'),
       },
       {
         role: 'user',
-        content: request.context.taskInput,
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          schemaVersion: request.context.schemaVersion,
-          recentTurns: request.context.recentTurns,
-          observations: request.context.observations,
-          omittedTurnCount: request.context.omittedTurnCount,
-          omittedObservationCount: request.context.omittedObservationCount,
-        }),
+        content: JSON.stringify(contextPayload),
       },
     ];
   }
 
+  const toolInstructions = buildToolInstructions(request);
   return [
     {
       role: 'developer',
-      content: 'Return only one JSON value representing the requested agent action.',
+      content:
+        toolInstructions === undefined
+          ? 'Return only one JSON value representing the requested agent action.'
+          : `Return only one JSON value representing the requested agent action.\n${toolInstructions}`,
     },
     {
       role: 'user',
@@ -126,6 +121,17 @@ function buildInput(request: ModelRequest): Array<{ role: 'developer' | 'user'; 
           },
         ]),
   ];
+}
+
+function buildToolInstructions(request: ModelRequest): string | undefined {
+  if (request.tools === undefined || request.tools.length === 0) {
+    return undefined;
+  }
+
+  return [
+    'Available tools for this request. If calling a tool, return a tool_call action using an exact name and arguments matching its inputSchema JSON Schema.',
+    JSON.stringify(request.tools),
+  ].join('\n');
 }
 
 function extractOutputText(body: OpenAIResponseBody): string {

@@ -108,6 +108,20 @@ function config(overrides: Partial<ExperimentConfig> = {}): ExperimentConfig {
   });
 }
 
+const provenance = {
+  schemaVersion: 1 as const,
+  sourceSnapshot: {
+    revision: 'a'.repeat(40),
+    files: [{ path: 'src/core/runtime.ts', sha256: 'b'.repeat(64) }],
+  },
+  redaction: {
+    schemaVersion: 1 as const,
+    toolCallArguments: 'redacted' as const,
+    sensitiveFields: 'rejected' as const,
+    arbitraryText: 'not_scanned' as const,
+  },
+};
+
 function startedEvent() {
   return traceEventSchema.parse({
     schemaVersion: 1,
@@ -183,6 +197,28 @@ describe('artifact run layout and publication', () => {
     await expect(fsPromises.readFile(run.paths.failure, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('persists validated snapshot provenance and the redaction policy in the manifest', async () => {
+    const root = await temporaryRoot();
+    const run = await createArtifactRun({
+      directory: root,
+      sessionId: 'session-1',
+      config: config({ tools: { enabled: ['repository.search'] } }),
+      provenance,
+      createdAt,
+    });
+    await run.trace.append(startedEvent());
+    await run.trace.append(completedEvent());
+
+    const manifest = await run.finalize({
+      status: 'completed',
+      completedAt: new Date('2026-09-21T10:00:01.000Z'),
+      finalOutput: { answer: 'Done' },
+    });
+
+    expect(manifest.configSummary.tools.enabled).toEqual(['repository.search']);
+    expect(manifest.provenance).toEqual(provenance);
   });
 
   it('does not create P5 metric artifacts and publishes manifest last', async () => {

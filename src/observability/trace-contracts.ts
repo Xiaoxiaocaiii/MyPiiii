@@ -279,6 +279,29 @@ export const runArtifactDescriptorSchema = z.strictObject({
   sha256: sha256Schema,
 });
 
+export const runProvenanceSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  sourceSnapshot: z.strictObject({
+    revision: z.string().regex(/^[a-f0-9]{40,64}$/),
+    files: z
+      .array(
+        z.strictObject({
+          path: artifactRelativePathSchema,
+          sha256: sha256Schema,
+        }),
+      )
+      .min(1),
+  }),
+  redaction: z.strictObject({
+    schemaVersion: z.literal(1),
+    toolCallArguments: z.literal('redacted'),
+    sensitiveFields: z.literal('rejected'),
+    arbitraryText: z.literal('not_scanned'),
+  }),
+});
+
+export type RunProvenance = z.infer<typeof runProvenanceSchema>;
+
 export const runManifestSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
@@ -296,6 +319,7 @@ export const runManifestSchema = z
       context: experimentConfigSchema.shape.context,
       tools: experimentConfigSchema.shape.tools,
     }),
+    provenance: runProvenanceSchema.optional(),
     artifacts: z.strictObject({
       trace: runArtifactDescriptorSchema,
       finalOutput: runArtifactDescriptorSchema,
